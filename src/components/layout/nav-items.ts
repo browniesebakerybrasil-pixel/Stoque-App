@@ -29,6 +29,7 @@ export const NAV_ITEMS: NavItem[] = [
     plans: ["basico", "full", "master"],
   },
   { href: "/canais", label: "Canais de venda", plans: ["basico", "full", "master"] },
+  { href: "/clientes", label: "Clientes", plans: ["basico", "full", "master"] },
   { href: "/pedidos", label: "Pedidos", plans: ["basico", "full", "master"] },
   { href: "/relatorios", label: "Relatórios", plans: ["full", "master"] },
   { href: "/financeiro", label: "Financeiro", plans: ["master"] },

@@ -2,14 +2,26 @@
 
 import { useActionState, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Input, Label, Select, Textarea } from "@/components/ui/input";
-import { createOrder } from "@/app/(dashboard)/pedidos/actions";
-import { calcOrderTotals, formatCurrency } from "@/lib/utils";
 import {
-  emptyActionState,
-  type ActionState as ActionStateT,
-} from "@/lib/validation";
-import type { SalesChannel, TechnicalSheet } from "@/types";
+  Input,
+  Label,
+  Select,
+  Textarea,
+} from "@/components/ui/input";
+import {
+  createOrder,
+  initialOrderState,
+} from "@/app/(dashboard)/pedidos/actions";
+import { calcOrderTotals, formatCurrency } from "@/lib/utils";
+import type { ActionState as ActionStateT } from "@/lib/validation";
+import type {
+  Customer,
+  DeliveryType,
+  PaymentMethod,
+  PaymentStatus,
+  SalesChannel,
+  TechnicalSheet,
+} from "@/types";
 
 interface ItemRow {
   technical_sheet_id: string;
@@ -25,21 +37,49 @@ const blankItem = (): ItemRow => ({
   unit_price: "",
 });
 
+const PAYMENT_METHODS: Array<{ value: PaymentMethod; label: string }> = [
+  { value: "pix", label: "Pix" },
+  { value: "credito", label: "Crédito" },
+  { value: "debito", label: "Débito" },
+  { value: "dinheiro", label: "Dinheiro" },
+  { value: "vale", label: "Vale" },
+];
+
+const PAYMENT_STATUSES: Array<{ value: PaymentStatus; label: string }> = [
+  { value: "nao_pago", label: "Não pago" },
+  { value: "sinal_pago", label: "Sinal pago" },
+  { value: "pago", label: "Pago" },
+];
+
+const DELIVERY_TYPES: Array<{ value: DeliveryType; label: string }> = [
+  { value: "retirada", label: "Retirada" },
+  { value: "entrega", label: "Entrega" },
+];
+
 export function OrderForm({
   channels,
   sheets,
+  customers,
 }: {
   channels: SalesChannel[];
   sheets: Pick<TechnicalSheet, "id" | "name" | "sale_price">[];
+  customers: Customer[];
 }) {
   const [items, setItems] = useState<ItemRow[]>([blankItem()]);
   const [channelId, setChannelId] = useState<string>(
-    channels.find((c) => c.name.toLowerCase() === "balcao")?.id ?? "",
+    channels.find((c) => c.name.toLowerCase() === "balcão")?.id ??
+      channels[0]?.id ??
+      "",
   );
+  const [customerId, setCustomerId] = useState<string>("");
+  const [deliveryType, setDeliveryType] = useState<DeliveryType>("retirada");
+  const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>("nao_pago");
+  const [deliveryAddress, setDeliveryAddress] = useState<string>("");
+
   const [state, formAction, pending] = useActionState<
     ActionStateT,
     FormData
-  >(createOrder, emptyActionState());
+  >(createOrder, initialOrderState);
 
   const fee = useMemo(() => {
     const ch = channels.find((c) => c.id === channelId);
@@ -82,8 +122,46 @@ export function OrderForm({
     );
   }
 
+  function selectCustomer(id: string) {
+    setCustomerId(id);
+    const cust = customers.find((c) => c.id === id);
+    if (cust?.address && !deliveryAddress) {
+      setDeliveryAddress(cust.address);
+    }
+  }
+
   return (
     <form action={formAction} className="space-y-6">
+      <div className="grid gap-3 md:grid-cols-2">
+        <div>
+          <Label htmlFor="customer_id">Cliente</Label>
+          <Select
+            id="customer_id"
+            name="customer_id"
+            value={customerId}
+            onChange={(e) => selectCustomer(e.target.value)}
+          >
+            <option value="">Sem cliente cadastrado</option>
+            {customers.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+                {c.whatsapp ? ` · ${c.whatsapp}` : ""}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <div>
+          <Label htmlFor="customer_name" hint="opcional se já selecionou acima">
+            Ou nome avulso
+          </Label>
+          <Input
+            id="customer_name"
+            name="customer_name"
+            placeholder="Cliente sem cadastro"
+          />
+        </div>
+      </div>
+
       <div className="grid gap-3 md:grid-cols-3">
         <div>
           <Label htmlFor="sales_channel_id">Canal</Label>
@@ -102,7 +180,7 @@ export function OrderForm({
           </Select>
         </div>
         <div>
-          <Label htmlFor="order_date">Data</Label>
+          <Label htmlFor="order_date">Data do pedido</Label>
           <Input
             id="order_date"
             name="order_date"
@@ -111,9 +189,41 @@ export function OrderForm({
           />
         </div>
         <div>
-          <Label htmlFor="notes">Observações</Label>
-          <Input id="notes" name="notes" placeholder="Ex.: cliente fiel" />
+          <Label htmlFor="delivery_date">Data de entrega</Label>
+          <Input id="delivery_date" name="delivery_date" type="date" />
         </div>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <div>
+          <Label htmlFor="delivery_type">Tipo de entrega</Label>
+          <Select
+            id="delivery_type"
+            name="delivery_type"
+            value={deliveryType}
+            onChange={(e) =>
+              setDeliveryType(e.target.value as DeliveryType)
+            }
+          >
+            {DELIVERY_TYPES.map((d) => (
+              <option key={d.value} value={d.value}>
+                {d.label}
+              </option>
+            ))}
+          </Select>
+        </div>
+        {deliveryType === "entrega" ? (
+          <div>
+            <Label htmlFor="delivery_address">Endereço de entrega</Label>
+            <Input
+              id="delivery_address"
+              name="delivery_address"
+              value={deliveryAddress}
+              onChange={(e) => setDeliveryAddress(e.target.value)}
+              placeholder="Rua, número, bairro, complemento"
+            />
+          </div>
+        ) : null}
       </div>
 
       <div className="rounded-md border border-[var(--border)] p-4">
@@ -208,6 +318,65 @@ export function OrderForm({
         </div>
       </div>
 
+      <fieldset className="rounded-md border border-[var(--border)] p-4">
+        <legend className="px-2 text-xs uppercase tracking-widest text-[var(--color-slate)]">
+          Pagamento
+        </legend>
+        <div className="grid gap-3 md:grid-cols-3">
+          <div>
+            <Label htmlFor="payment_method">Forma de pagamento</Label>
+            <Select id="payment_method" name="payment_method" defaultValue="pix">
+              {PAYMENT_METHODS.map((p) => (
+                <option key={p.value} value={p.value}>
+                  {p.label}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div>
+            <Label htmlFor="payment_status">Status</Label>
+            <Select
+              id="payment_status"
+              name="payment_status"
+              value={paymentStatus}
+              onChange={(e) =>
+                setPaymentStatus(e.target.value as PaymentStatus)
+              }
+            >
+              {PAYMENT_STATUSES.map((p) => (
+                <option key={p.value} value={p.value}>
+                  {p.label}
+                </option>
+              ))}
+            </Select>
+          </div>
+          {paymentStatus === "sinal_pago" ? (
+            <div>
+              <Label htmlFor="amount_paid" hint="R$">
+                Valor já pago
+              </Label>
+              <Input
+                id="amount_paid"
+                name="amount_paid"
+                inputMode="decimal"
+                placeholder="0,00"
+              />
+            </div>
+          ) : (
+            <input
+              type="hidden"
+              name="amount_paid"
+              value={paymentStatus === "pago" ? totals.grossAmount : 0}
+            />
+          )}
+        </div>
+      </fieldset>
+
+      <div>
+        <Label htmlFor="notes">Observações</Label>
+        <Textarea id="notes" name="notes" placeholder="Recados internos, preferências do cliente" />
+      </div>
+
       <div className="grid gap-2 rounded-md bg-[var(--color-cream-50)] p-4 md:grid-cols-3">
         <Stat label="Bruto" value={formatCurrency(totals.grossAmount)} />
         <Stat
@@ -221,7 +390,9 @@ export function OrderForm({
         />
       </div>
 
-      {state.error ? <p className="text-sm text-red-700">{state.error}</p> : null}
+      {state.error ? (
+        <p className="text-sm text-red-700">{state.error}</p>
+      ) : null}
 
       <div className="flex justify-end">
         <Button type="submit" disabled={pending}>

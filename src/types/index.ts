@@ -179,6 +179,26 @@ export interface TechnicalSheetWithIngredients extends TechnicalSheet {
 // Pedidos
 // ---------------------------------------------------------------------------
 
+export type OrderStatus =
+  | "novo"
+  | "confirmado"
+  | "em_producao"
+  | "pronto"
+  | "saiu"
+  | "entregue"
+  | "cancelado";
+
+export type PaymentStatus = "nao_pago" | "sinal_pago" | "pago";
+
+export type PaymentMethod =
+  | "pix"
+  | "credito"
+  | "debito"
+  | "dinheiro"
+  | "vale";
+
+export type DeliveryType = "retirada" | "entrega";
+
 export interface Order {
   id: string;
   organization_id: string;
@@ -189,6 +209,33 @@ export interface Order {
   net_amount: number;
   notes: string | null;
   created_at: string;
+
+  // novas colunas (migration 002)
+  customer_id: string | null;
+  customer_name: string | null;
+  delivery_date: string | null;
+  delivery_type: DeliveryType;
+  delivery_address: string | null;
+  order_status: OrderStatus;
+  payment_status: PaymentStatus;
+  payment_method: PaymentMethod;
+  amount_paid: number;
+  order_number: number;
+}
+
+export interface Customer {
+  id: string;
+  organization_id: string;
+  name: string;
+  whatsapp: string | null;
+  birthday: string | null;
+  address: string | null;
+  notes: string | null;
+  order_count: number;
+  loyalty_gift_given: boolean;
+  loyalty_gift_date: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface OrderItem {
@@ -206,6 +253,7 @@ export interface OrderItem {
 export interface OrderWithItems extends Order {
   items: OrderItem[];
   channel: SalesChannel | null;
+  customer: Customer | null;
 }
 
 // ---------------------------------------------------------------------------

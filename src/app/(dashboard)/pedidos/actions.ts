@@ -6,24 +6,50 @@ import { z } from "zod";
 import { requireOrganization } from "@/lib/auth/organization";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
+  deliveryTypeEnum,
+  emptyActionState,
   numberFromInput,
+  orderStatusEnum,
+  paymentMethodEnum,
+  paymentStatusEnum,
   type ActionState,
 } from "@/lib/validation";
 import { calcOrderTotals } from "@/lib/utils";
-import type { SalesChannel } from "@/types";
+import type {
+  DeliveryType,
+  OrderStatus,
+  PaymentMethod,
+  PaymentStatus,
+  SalesChannel,
+} from "@/types";
+import { bumpCustomerOrderCount } from "@/app/(dashboard)/clientes/actions";
+
+export const initialOrderState: ActionState = emptyActionState();
 
 /**
- * Schema customizado para o formulario de pedido. Os itens chegam como linhas
- * indexadas (`items.0.product_name`, `items.0.quantity`, etc.). Usamos a mesma
- * convencao do react-hook-form embora tenhamos optado por Server Actions.
+ * Schema do formulário de pedido — campos da migration 002 já contemplados.
+ * Itens chegam como linhas indexadas `items.0.product_name`, etc.
  */
 const orderFormSchema = z.object({
+  customer_id: z.string().uuid().optional().or(z.literal("")),
+  customer_name: z.string().max(120).optional().or(z.literal("")),
   sales_channel_id: z.string().uuid().optional().or(z.literal("")),
   order_date: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, "Data inválida.")
     .optional()
     .or(z.literal("")),
+  delivery_date: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "Data inválida.")
+    .optional()
+    .or(z.literal("")),
+  delivery_type: deliveryTypeEnum.default("retirada"),
+  delivery_address: z.string().max(300).optional().or(z.literal("")),
+  payment_status: paymentStatusEnum.default("nao_pago"),
+  payment_method: paymentMethodEnum.default("pix"),
+  amount_paid: numberFromInput.optional(),
+  order_status: orderStatusEnum.default("novo"),
   notes: z.string().max(500).optional().or(z.literal("")),
 });
 
@@ -46,15 +72,26 @@ export async function createOrder(
   const { organization } = await requireOrganization();
 
   const baseParse = orderFormSchema.safeParse({
+    customer_id: formData.get("customer_id") ?? "",
+    customer_name: formData.get("customer_name") ?? "",
     sales_channel_id: formData.get("sales_channel_id") ?? "",
     order_date: formData.get("order_date") ?? "",
+    delivery_date: formData.get("delivery_date") ?? "",
+    delivery_type: formData.get("delivery_type") ?? "retirada",
+    delivery_address: formData.get("delivery_address") ?? "",
+    payment_status: formData.get("payment_status") ?? "nao_pago",
+    payment_method: formData.get("payment_method") ?? "pix",
+    amount_paid: formData.get("amount_paid") ?? "0",
+    order_status: formData.get("order_status") ?? "novo",
     notes: formData.get("notes") ?? "",
   });
   if (!baseParse.success) {
-    return { ok: false, error: "Dados do pedido inválidos." };
+    return {
+      ok: false,
+      error: `Dados do pedido inválidos: ${baseParse.error.issues[0]?.message}`,
+    };
   }
 
-  // Coleta as linhas de items (form usa items[0][product_name], etc.)
   const itemRows = collectItems(formData);
   if (itemRows.length === 0) {
     return { ok: false, error: "Adicione ao menos um item." };
@@ -84,7 +121,7 @@ export async function createOrder(
 
   const supabase = createAdminClient();
 
-  // Busca taxa do canal escolhido para calcular liquido
+  // Taxa do canal (se houver)
   let feePct = 0;
   const channelId = baseParse.data.sales_channel_id || null;
   if (channelId) {
@@ -93,7 +130,10 @@ export async function createOrder(
       .select("fee_percentage")
       .eq("id", channelId)
       .maybeSingle();
-    feePct = Number((channel as Pick<SalesChannel, "fee_percentage"> | null)?.fee_percentage ?? 0);
+    feePct = Number(
+      (channel as Pick<SalesChannel, "fee_percentage"> | null)?.fee_percentage ??
+        0,
+    );
   }
 
   const { grossAmount, netAmount } = calcOrderTotals(
@@ -101,12 +141,45 @@ export async function createOrder(
     feePct,
   );
 
+  const customerId = baseParse.data.customer_id || null;
+  let customerName = baseParse.data.customer_name?.trim() || null;
+  if (customerId && !customerName) {
+    const { data: cust } = await supabase
+      .from("customers")
+      .select("name")
+      .eq("id", customerId)
+      .maybeSingle();
+    customerName = (cust as { name: string } | null)?.name ?? null;
+  }
+
+  const paymentStatus: PaymentStatus = baseParse.data.payment_status;
+  const amountPaidRaw = Number(baseParse.data.amount_paid ?? 0);
+  const amountPaid =
+    paymentStatus === "pago"
+      ? grossAmount
+      : paymentStatus === "sinal_pago"
+        ? round2(amountPaidRaw)
+        : 0;
+
   const { data: order, error: orderErr } = await supabase
     .from("orders")
     .insert({
       organization_id: organization.id,
       sales_channel_id: channelId,
-      order_date: baseParse.data.order_date || new Date().toISOString().slice(0, 10),
+      customer_id: customerId,
+      customer_name: customerName,
+      order_date:
+        baseParse.data.order_date || new Date().toISOString().slice(0, 10),
+      delivery_date: baseParse.data.delivery_date || null,
+      delivery_type: baseParse.data.delivery_type as DeliveryType,
+      delivery_address:
+        baseParse.data.delivery_type === "entrega"
+          ? baseParse.data.delivery_address || null
+          : null,
+      order_status: baseParse.data.order_status as OrderStatus,
+      payment_status: paymentStatus,
+      payment_method: baseParse.data.payment_method as PaymentMethod,
+      amount_paid: amountPaid,
       notes: baseParse.data.notes || null,
       total_amount: round2(grossAmount),
       net_amount: round2(netAmount),
@@ -129,14 +202,132 @@ export async function createOrder(
   );
   if (itemsErr) {
     console.error("[createOrder items]", itemsErr);
-    // Limpa o pedido para nao deixar orfao
     await supabase.from("orders").delete().eq("id", order.id);
     return { ok: false, error: "Erro ao salvar itens." };
+  }
+
+  if (customerId) {
+    await bumpCustomerOrderCount(customerId);
   }
 
   revalidatePath("/pedidos");
   revalidatePath("/dashboard");
   redirect("/pedidos");
+}
+
+/**
+ * Atualiza apenas o status do pedido (usado pelo drag-and-drop do Kanban).
+ */
+export async function updateOrderStatus(id: string, status: OrderStatus) {
+  await requireOrganization();
+  const supabase = createAdminClient();
+  await supabase.from("orders").update({ order_status: status }).eq("id", id);
+  revalidatePath("/pedidos");
+  revalidatePath("/dashboard");
+}
+
+/**
+ * Atualiza status de pagamento. Se virar "pago", ajusta `amount_paid` para
+ * total_amount automaticamente. Se virar "nao_pago", zera.
+ */
+export async function updateOrderPayment(
+  id: string,
+  payment_status: PaymentStatus,
+  amount_paid?: number,
+) {
+  await requireOrganization();
+  const supabase = createAdminClient();
+  const { data: cur } = await supabase
+    .from("orders")
+    .select("total_amount")
+    .eq("id", id)
+    .maybeSingle();
+  const total = Number((cur as { total_amount: number } | null)?.total_amount ?? 0);
+  const value =
+    payment_status === "pago"
+      ? total
+      : payment_status === "nao_pago"
+        ? 0
+        : Math.max(0, Number(amount_paid ?? 0));
+  await supabase
+    .from("orders")
+    .update({ payment_status, amount_paid: round2(value) })
+    .eq("id", id);
+  revalidatePath("/pedidos");
+  revalidatePath("/dashboard");
+}
+
+const orderEditSchema = z.object({
+  order_status: orderStatusEnum,
+  payment_status: paymentStatusEnum,
+  payment_method: paymentMethodEnum,
+  amount_paid: numberFromInput.optional(),
+  delivery_date: z.string().optional().or(z.literal("")),
+  delivery_type: deliveryTypeEnum,
+  delivery_address: z.string().max(300).optional().or(z.literal("")),
+  notes: z.string().max(500).optional().or(z.literal("")),
+});
+
+/**
+ * Edição completa de um pedido a partir do modal de detalhes.
+ */
+export async function updateOrderFromModal(
+  id: string,
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireOrganization();
+  const parsed = orderEditSchema.safeParse({
+    order_status: formData.get("order_status"),
+    payment_status: formData.get("payment_status"),
+    payment_method: formData.get("payment_method"),
+    amount_paid: formData.get("amount_paid") ?? 0,
+    delivery_date: formData.get("delivery_date") ?? "",
+    delivery_type: formData.get("delivery_type"),
+    delivery_address: formData.get("delivery_address") ?? "",
+    notes: formData.get("notes") ?? "",
+  });
+  if (!parsed.success) {
+    return { ok: false, error: "Dados inválidos." };
+  }
+
+  const supabase = createAdminClient();
+  const { data: cur } = await supabase
+    .from("orders")
+    .select("total_amount")
+    .eq("id", id)
+    .maybeSingle();
+  const total = Number((cur as { total_amount: number } | null)?.total_amount ?? 0);
+  const amountPaid =
+    parsed.data.payment_status === "pago"
+      ? total
+      : parsed.data.payment_status === "nao_pago"
+        ? 0
+        : Math.max(0, Number(parsed.data.amount_paid ?? 0));
+
+  const { error } = await supabase
+    .from("orders")
+    .update({
+      order_status: parsed.data.order_status,
+      payment_status: parsed.data.payment_status,
+      payment_method: parsed.data.payment_method,
+      amount_paid: round2(amountPaid),
+      delivery_date: parsed.data.delivery_date || null,
+      delivery_type: parsed.data.delivery_type,
+      delivery_address:
+        parsed.data.delivery_type === "entrega"
+          ? parsed.data.delivery_address || null
+          : null,
+      notes: parsed.data.notes || null,
+    })
+    .eq("id", id);
+  if (error) {
+    console.error("[updateOrderFromModal]", error);
+    return { ok: false, error: "Erro ao salvar." };
+  }
+  revalidatePath("/pedidos");
+  revalidatePath("/dashboard");
+  return { ok: true };
 }
 
 export async function deleteOrder(id: string) {

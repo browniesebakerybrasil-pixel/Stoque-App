@@ -123,6 +123,53 @@ export const orderSchema = z.object({
   notes: z.string().max(500).optional(),
 });
 
+export const customerSchema = z.object({
+  name: z.string().min(1, "Informe o nome.").max(120),
+  whatsapp: z
+    .string()
+    .max(40)
+    .optional()
+    .transform((v) => (v ? v.trim() : null)),
+  birthday: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "Data inválida.")
+    .optional()
+    .or(z.literal(""))
+    .transform((v) => (v ? v : null)),
+  address: z
+    .string()
+    .max(300)
+    .optional()
+    .transform((v) => (v ? v : null)),
+  notes: z
+    .string()
+    .max(500)
+    .optional()
+    .transform((v) => (v ? v : null)),
+});
+
+export const orderStatusEnum = z.enum([
+  "novo",
+  "confirmado",
+  "em_producao",
+  "pronto",
+  "saiu",
+  "entregue",
+  "cancelado",
+]);
+
+export const paymentStatusEnum = z.enum(["nao_pago", "sinal_pago", "pago"]);
+
+export const paymentMethodEnum = z.enum([
+  "pix",
+  "credito",
+  "debito",
+  "dinheiro",
+  "vale",
+]);
+
+export const deliveryTypeEnum = z.enum(["retirada", "entrega"]);
+
 export const fixedCostSchema = z.object({
   name: z.string().min(1).max(120),
   category: z
