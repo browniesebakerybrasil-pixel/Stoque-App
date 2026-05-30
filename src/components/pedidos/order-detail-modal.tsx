@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState, useEffect } from "react";
+import { useActionState, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Input, Label, Select, Textarea } from "@/components/ui/input";
 import { formatCurrency } from "@/lib/utils";
@@ -20,31 +21,55 @@ export function OrderDetailModal({
   order: KanbanOrder | null;
   onClose: () => void;
 }) {
-  const isOpen = order != null;
+  const [mounted, setMounted] = useState(false);
 
+  // garante portal só roda no client (evita SSR mismatch)
   useEffect(() => {
-    if (!isOpen) return;
-    const onKey = (e: KeyboardEvent) => {
+    setMounted(true);
+  }, []);
+
+  // ESC fecha
+  useEffect(() => {
+    if (!order) return;
+    function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
-    };
+    }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [isOpen, onClose]);
+  }, [order, onClose]);
 
-  if (!order) return null;
-  return (
+  // body scroll lock quando aberto
+  useEffect(() => {
+    if (!order) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [order]);
+
+  if (!order || !mounted) return null;
+
+  const node = (
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-6"
-      onClick={onClose}
+      className="fixed inset-0 z-[100] flex items-end justify-center bg-black/50 backdrop-blur-sm sm:items-center sm:p-6"
+      onMouseDown={(e) => {
+        // Só fecha se clicou EXATAMENTE no backdrop (não no conteúdo)
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
       <div
-        className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-t-xl bg-white sm:rounded-xl"
+        className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-t-2xl bg-white shadow-2xl sm:rounded-2xl"
+        onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
+        onTouchStart={(e) => e.stopPropagation()}
       >
         <ModalBody order={order} onClose={onClose} />
       </div>
     </div>
   );
+
+  return createPortal(node, document.body);
 }
 
 function ModalBody({
@@ -67,11 +92,11 @@ function ModalBody({
   const balance = Number(order.total_amount) - Number(order.amount_paid);
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="space-y-6 p-5 sm:p-6">
       <header className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-xs font-mono text-[var(--color-slate)]">
-            #{String(order.order_number).padStart(3, "0")}
+          <p className="text-xs font-mono uppercase tracking-wider text-[var(--color-slate)]">
+            Pedido #{String(order.order_number).padStart(3, "0")}
           </p>
           <h2 className="font-serif text-2xl text-[var(--color-navy)]">
             {order.customer_name ?? order.customer?.name ?? "Sem cliente"}
@@ -86,7 +111,7 @@ function ModalBody({
           type="button"
           onClick={onClose}
           aria-label="Fechar"
-          className="text-2xl text-[var(--color-slate)] hover:text-[var(--color-navy)]"
+          className="-mr-1 -mt-1 rounded-full p-2 text-2xl leading-none text-[var(--color-slate)] hover:bg-[var(--color-cream-50)] hover:text-[var(--color-navy)]"
         >
           ×
         </button>
@@ -106,13 +131,16 @@ function ModalBody({
         <h3 className="text-xs uppercase tracking-widest text-[var(--color-slate)]">
           Itens
         </h3>
-        <ul className="mt-2 divide-y divide-[var(--border)] rounded-md border border-[var(--border)]">
+        <ul className="mt-2 divide-y divide-[var(--border)] rounded-md border border-[var(--border)] bg-white">
           {order.items.map((it) => (
-            <li key={it.id} className="flex items-center justify-between px-3 py-2 text-sm">
+            <li
+              key={it.id}
+              className="flex items-center justify-between px-3 py-2 text-sm"
+            >
               <span>
                 {it.quantity}× {it.product_name}
               </span>
-              <span className="text-[var(--color-slate)]">
+              <span className="font-medium text-[var(--color-slate)]">
                 {formatCurrency(Number(it.total_price))}
               </span>
             </li>
@@ -228,7 +256,7 @@ function ModalBody({
           <p className="text-sm text-red-700">{state.error}</p>
         ) : null}
 
-        <div className="flex justify-end gap-2">
+        <div className="flex justify-end gap-2 border-t border-[var(--border)] pt-4">
           <Button type="button" variant="ghost" onClick={onClose}>
             Cancelar
           </Button>

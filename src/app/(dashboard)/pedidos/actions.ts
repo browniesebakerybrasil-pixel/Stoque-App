@@ -22,7 +22,6 @@ import type {
   PaymentStatus,
   SalesChannel,
 } from "@/types";
-import { bumpCustomerOrderCount } from "@/app/(dashboard)/clientes/actions";
 
 export const initialOrderState: ActionState = emptyActionState();
 
@@ -207,7 +206,24 @@ export async function createOrder(
   }
 
   if (customerId) {
-    await bumpCustomerOrderCount(customerId);
+    // Incrementa order_count do cliente. Inline pra evitar ida-volta de
+    // server-action: tudo roda no mesmo admin client.
+    const { data: cust } = await supabase
+      .from("customers")
+      .select("order_count")
+      .eq("id", customerId)
+      .maybeSingle();
+    const nextCount =
+      (Number((cust as { order_count?: number } | null)?.order_count) || 0) + 1;
+    const { error: bumpErr } = await supabase
+      .from("customers")
+      .update({ order_count: nextCount })
+      .eq("id", customerId);
+    if (bumpErr) {
+      console.error("[createOrder] bump order_count", bumpErr);
+    }
+    revalidatePath(`/clientes/${customerId}`);
+    revalidatePath("/clientes");
   }
 
   revalidatePath("/pedidos");

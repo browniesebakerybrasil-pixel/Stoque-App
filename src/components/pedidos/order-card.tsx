@@ -12,59 +12,80 @@ interface Props {
   onOpen: (id: string) => void;
   onDragStart?: (id: string) => void;
   onMarkPaid: (id: string) => void;
+  onTouchStart?: (e: React.TouchEvent, id: string) => void;
+  isDragging?: boolean;
 }
 
 /**
- * Card de pedido usado dentro de cada coluna do Kanban.
- *
- * Bindings:
- *  - draggable=true em desktop (pointer drag) — no mobile o usuário
- *    abre o modal pra mudar status.
- *  - clique abre o modal de detalhes.
- *  - botão "Marcar pago" não propaga clique pro card.
+ * Card de pedido do Kanban.
+ * - draggable HTML5 (desktop)
+ * - onTouchStart inicia drag manual no iPad (gerenciado pelo Kanban)
+ * - botão "Pago" sempre visível e fora do clique do card (stopPropagation)
  */
 export function OrderCard({
   order,
   onOpen,
   onDragStart,
   onMarkPaid,
+  onTouchStart,
+  isDragging,
 }: Props) {
   const today = new Date().toISOString().slice(0, 10);
-  const lateDelivery =
-    order.delivery_date != null && order.delivery_date <= today;
+  const deliveryState: "future" | "today" | "past" | "none" = order.delivery_date
+    ? order.delivery_date === today
+      ? "today"
+      : order.delivery_date < today
+        ? "past"
+        : "future"
+    : "none";
+
+  const deliveryStyle =
+    deliveryState === "today"
+      ? "bg-amber-100 text-amber-900 border-amber-300"
+      : deliveryState === "past"
+        ? "bg-red-100 text-red-800 border-red-300"
+        : "bg-[var(--color-cream-50)] text-[var(--color-slate)] border-[var(--border)]";
 
   return (
     <article
+      data-order-id={order.id}
       draggable
       onDragStart={(e) => {
         e.dataTransfer.setData("text/plain", order.id);
         e.dataTransfer.effectAllowed = "move";
         onDragStart?.(order.id);
       }}
+      onTouchStart={(e) => onTouchStart?.(e, order.id)}
       onClick={() => onOpen(order.id)}
-      className="group cursor-pointer rounded-md border border-[var(--border)] bg-white p-3 shadow-sm transition-colors hover:border-[var(--color-navy)]"
+      className={cn(
+        "cursor-pointer touch-none rounded-md border bg-white p-3 shadow-sm transition-all",
+        "active:scale-[0.99]",
+        isDragging
+          ? "border-[var(--color-brown)] opacity-50"
+          : "border-[var(--border)] hover:border-[var(--color-navy)]",
+      )}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="text-xs font-mono text-[var(--color-slate)]">
+          <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--color-slate)]">
             #{String(order.order_number).padStart(3, "0")}
           </p>
-          <p className="mt-1 truncate text-sm font-medium text-[var(--color-navy)]">
+          <p className="mt-0.5 truncate text-sm font-medium text-[var(--color-navy)]">
             {order.customer_name ?? order.customer?.name ?? "Sem cliente"}
           </p>
         </div>
         <span
           className={cn(
-            "shrink-0 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wider",
+            "shrink-0 rounded-md border px-2 py-1 text-[11px] font-semibold uppercase tracking-wide",
             PAYMENT_BADGE[order.payment_status],
           )}
           title={PAYMENT_STATUS_LABEL[order.payment_status]}
         >
           {order.payment_status === "nao_pago"
-            ? "não pago"
+            ? "Não pago"
             : order.payment_status === "sinal_pago"
-              ? "sinal"
-              : "pago"}
+              ? "Sinal"
+              : "Pago"}
         </span>
       </div>
 
@@ -79,25 +100,30 @@ export function OrderCard({
         ) : null}
       </ul>
 
-      <div className="mt-3 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-xs text-[var(--color-slate)]">
-          <span title={order.delivery_type === "entrega" ? "Entrega" : "Retirada"}>
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-1.5 text-xs text-[var(--color-slate)]">
+          <span
+            title={order.delivery_type === "entrega" ? "Entrega" : "Retirada"}
+          >
             {order.delivery_type === "entrega" ? "→ entrega" : "↑ retirada"}
           </span>
           {order.delivery_date ? (
             <span
               className={cn(
-                "rounded px-1.5 py-0.5",
-                lateDelivery
-                  ? "bg-red-100 text-red-800"
-                  : "bg-[var(--color-cream-50)] text-[var(--color-slate)]",
+                "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-medium",
+                deliveryStyle,
               )}
             >
+              {deliveryState === "today" || deliveryState === "past" ? (
+                <AlertIcon />
+              ) : null}
               {formatDateShort(order.delivery_date)}
+              {deliveryState === "today" ? " · hoje" : ""}
+              {deliveryState === "past" ? " · atrasado" : ""}
             </span>
           ) : null}
         </div>
-        <span className="font-medium text-[var(--color-navy)]">
+        <span className="text-base font-bold text-[var(--color-navy)]">
           {formatCurrency(Number(order.total_amount))}
         </span>
       </div>
@@ -109,12 +135,27 @@ export function OrderCard({
             e.stopPropagation();
             onMarkPaid(order.id);
           }}
-          className="mt-2 w-full rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs text-emerald-800 opacity-0 transition-opacity hover:bg-emerald-100 group-hover:opacity-100"
+          onPointerDown={(e) => e.stopPropagation()}
+          className="mt-3 w-full rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1.5 text-xs font-medium text-emerald-800 transition-colors hover:bg-emerald-100 active:bg-emerald-200"
         >
           Marcar como pago
         </button>
       ) : null}
     </article>
+  );
+}
+
+function AlertIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="11"
+      height="11"
+      aria-hidden
+      fill="currentColor"
+    >
+      <path d="M8 1.5a1.1 1.1 0 0 1 .96.55l6.4 11.1A1.1 1.1 0 0 1 14.4 14.8H1.6a1.1 1.1 0 0 1-.96-1.65l6.4-11.1A1.1 1.1 0 0 1 8 1.5Zm0 5a.7.7 0 0 0-.7.7v3.2a.7.7 0 1 0 1.4 0V7.2a.7.7 0 0 0-.7-.7Zm0 6.6a.85.85 0 1 0 0-1.7.85.85 0 0 0 0 1.7Z" />
+    </svg>
   );
 }
 

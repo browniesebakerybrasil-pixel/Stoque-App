@@ -1,5 +1,19 @@
 import type { OrderStatus, PaymentStatus, PaymentMethod } from "@/types";
 
+/**
+ * Cor de cada coluna do Kanban. Usada na barra superior, no título e na
+ * borda do card durante o drag-and-drop.
+ */
+export const ORDER_STATUS_COLOR: Record<OrderStatus, string> = {
+  novo: "#0C3C59",       // navy
+  confirmado: "#D9A441", // âmbar
+  em_producao: "#AD7039", // laranja queimado
+  pronto: "#2D9E75",     // verde
+  saiu: "#4A6572",       // slate / roxo-acinzentado
+  entregue: "#94A3AF",   // cinza
+  cancelado: "#B91C1C",  // vermelho
+};
+
 export const ORDER_COLUMNS: Array<{
   status: OrderStatus;
   label: string;
@@ -39,7 +53,7 @@ export const PAYMENT_METHOD_LABEL: Record<PaymentMethod, string> = {
 };
 
 export const PAYMENT_BADGE: Record<PaymentStatus, string> = {
-  nao_pago: "bg-red-100 text-red-800 border-red-200",
-  sinal_pago: "bg-amber-100 text-amber-800 border-amber-200",
-  pago: "bg-emerald-100 text-emerald-800 border-emerald-200",
+  nao_pago: "bg-red-100 text-red-800 border-red-300",
+  sinal_pago: "bg-amber-100 text-amber-900 border-amber-300",
+  pago: "bg-emerald-100 text-emerald-800 border-emerald-300",
 };
