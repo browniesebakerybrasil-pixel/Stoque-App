@@ -8,12 +8,12 @@ import {
   Select,
   Textarea,
 } from "@/components/ui/input";
-import {
-  createOrder,
-  initialOrderState,
-} from "@/app/(dashboard)/pedidos/actions";
+import { createOrder } from "@/app/(dashboard)/pedidos/actions";
 import { calcOrderTotals, formatCurrency } from "@/lib/utils";
-import type { ActionState as ActionStateT } from "@/lib/validation";
+import {
+  emptyActionState,
+  type ActionState as ActionStateT,
+} from "@/lib/validation";
 import type {
   Customer,
   DeliveryType,
@@ -79,7 +79,7 @@ export function OrderForm({
   const [state, formAction, pending] = useActionState<
     ActionStateT,
     FormData
-  >(createOrder, initialOrderState);
+  >(createOrder, emptyActionState());
 
   const fee = useMemo(() => {
     const ch = channels.find((c) => c.id === channelId);

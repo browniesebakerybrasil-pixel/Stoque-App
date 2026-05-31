@@ -6,17 +6,17 @@ import { requireOrganization } from "@/lib/auth/organization";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   customerSchema,
-  emptyActionState,
   parseFormData,
   type ActionState,
 } from "@/lib/validation";
 
-export const initialCustomerState: ActionState = emptyActionState();
+// `initialCustomerState` foi removido: Next 16 nao permite exports nao-async
+// em arquivos "use server". Componentes chamam emptyActionState() inline.
 
 const LOYALTY_THRESHOLD = 10;
 
 /**
- * Cria um novo cliente. Após salvar redireciona para o perfil.
+ * Cria um novo cliente. Apos salvar redireciona para o perfil.
  */
 export async function createCustomer(
   _prev: ActionState,
@@ -73,7 +73,7 @@ export async function deleteCustomer(id: string) {
 
 /**
  * Marca o "mimo de fidelidade" como entregue na data informada (ou hoje).
- * Quando o cliente atinge 10 pedidos a UI sugere registrar o mimo.
+ * Quando o cliente atinge LOYALTY_THRESHOLD pedidos a UI sugere registrar.
  */
 export async function markLoyaltyGift(id: string, date?: string) {
   await requireOrganization();
@@ -99,9 +99,9 @@ export async function resetLoyaltyGift(id: string) {
 }
 
 /**
- * Incrementa o contador de pedidos do cliente. Chamado pela action de
- * criar pedido. Evita race conditions usando RPC simples (read-modify-write
- * no admin client é aceitável pelo baixo concurrent volume de cada org).
+ * Incrementa o contador de pedidos do cliente. Read-modify-write simples
+ * porque o volume concorrente por organizacao e baixo. Threshold em
+ * LOYALTY_THRESHOLD (local, sem export — "use server" nao permite).
  */
 export async function bumpCustomerOrderCount(customerId: string) {
   const supabase = createAdminClient();
@@ -110,11 +110,15 @@ export async function bumpCustomerOrderCount(customerId: string) {
     .select("order_count")
     .eq("id", customerId)
     .maybeSingle();
-  const next = (Number(cur?.order_count) || 0) + 1;
+  const next =
+    (Number((cur as { order_count?: number } | null)?.order_count) || 0) + 1;
   await supabase
     .from("customers")
     .update({ order_count: next })
     .eq("id", customerId);
-}
 
-export { LOYALTY_THRESHOLD };
+  // Quando atinge o threshold, somente revalida — a UI mostra o CTA do mimo.
+  if (next >= LOYALTY_THRESHOLD) {
+    revalidatePath(`/clientes/${customerId}`);
+  }
+}

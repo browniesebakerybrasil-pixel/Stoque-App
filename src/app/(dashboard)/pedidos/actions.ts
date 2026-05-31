@@ -7,7 +7,6 @@ import { requireOrganization } from "@/lib/auth/organization";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   deliveryTypeEnum,
-  emptyActionState,
   numberFromInput,
   orderStatusEnum,
   paymentMethodEnum,
@@ -23,24 +22,21 @@ import type {
   SalesChannel,
 } from "@/types";
 
-export const initialOrderState: ActionState = emptyActionState();
+// `initialOrderState` foi removido: Next 16 nao permite exports nao-async em
+// arquivos "use server". Componentes chamam emptyActionState() inline.
 
-/**
- * Schema do formulário de pedido — campos da migration 002 já contemplados.
- * Itens chegam como linhas indexadas `items.0.product_name`, etc.
- */
 const orderFormSchema = z.object({
   customer_id: z.string().uuid().optional().or(z.literal("")),
   customer_name: z.string().max(120).optional().or(z.literal("")),
   sales_channel_id: z.string().uuid().optional().or(z.literal("")),
   order_date: z
     .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, "Data inválida.")
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "Data invalida.")
     .optional()
     .or(z.literal("")),
   delivery_date: z
     .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, "Data inválida.")
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "Data invalida.")
     .optional()
     .or(z.literal("")),
   delivery_type: deliveryTypeEnum.default("retirada"),
@@ -54,13 +50,13 @@ const orderFormSchema = z.object({
 
 const orderItemFormSchema = z.object({
   technical_sheet_id: z.string().uuid().optional().or(z.literal("")),
-  product_name: z.string().min(1, "Nome obrigatório."),
+  product_name: z.string().min(1, "Nome obrigatorio."),
   quantity: numberFromInput.refine(
     (n) => Number.isFinite(n) && Number.isInteger(n) && n > 0,
     { message: "Quantidade > 0." },
   ),
   unit_price: numberFromInput.refine((n) => n >= 0, {
-    message: "Preço inválido.",
+    message: "Preco invalido.",
   }),
 });
 
@@ -87,7 +83,7 @@ export async function createOrder(
   if (!baseParse.success) {
     return {
       ok: false,
-      error: `Dados do pedido inválidos: ${baseParse.error.issues[0]?.message}`,
+      error: "Dados do pedido invalidos: " + (baseParse.error.issues[0]?.message ?? ""),
     };
   }
 
@@ -107,7 +103,7 @@ export async function createOrder(
     if (!parsed.success) {
       return {
         ok: false,
-        error: `Item inválido: ${parsed.error.issues[0]?.message ?? "verifique"}.`,
+        error: "Item invalido: " + (parsed.error.issues[0]?.message ?? "verifique"),
       };
     }
     items.push({
@@ -130,8 +126,7 @@ export async function createOrder(
       .eq("id", channelId)
       .maybeSingle();
     feePct = Number(
-      (channel as Pick<SalesChannel, "fee_percentage"> | null)?.fee_percentage ??
-        0,
+      (channel as Pick<SalesChannel, "fee_percentage"> | null)?.fee_percentage ?? 0,
     );
   }
 
@@ -206,8 +201,6 @@ export async function createOrder(
   }
 
   if (customerId) {
-    // Incrementa order_count do cliente. Inline pra evitar ida-volta de
-    // server-action: tudo roda no mesmo admin client.
     const { data: cust } = await supabase
       .from("customers")
       .select("order_count")
@@ -231,9 +224,6 @@ export async function createOrder(
   redirect("/pedidos");
 }
 
-/**
- * Atualiza apenas o status do pedido (usado pelo drag-and-drop do Kanban).
- */
 export async function updateOrderStatus(id: string, status: OrderStatus) {
   await requireOrganization();
   const supabase = createAdminClient();
@@ -242,10 +232,6 @@ export async function updateOrderStatus(id: string, status: OrderStatus) {
   revalidatePath("/dashboard");
 }
 
-/**
- * Atualiza status de pagamento. Se virar "pago", ajusta `amount_paid` para
- * total_amount automaticamente. Se virar "nao_pago", zera.
- */
 export async function updateOrderPayment(
   id: string,
   payment_status: PaymentStatus,
@@ -284,9 +270,6 @@ const orderEditSchema = z.object({
   notes: z.string().max(500).optional().or(z.literal("")),
 });
 
-/**
- * Edição completa de um pedido a partir do modal de detalhes.
- */
 export async function updateOrderFromModal(
   id: string,
   _prev: ActionState,
@@ -304,7 +287,7 @@ export async function updateOrderFromModal(
     notes: formData.get("notes") ?? "",
   });
   if (!parsed.success) {
-    return { ok: false, error: "Dados inválidos." };
+    return { ok: false, error: "Dados invalidos." };
   }
 
   const supabase = createAdminClient();
@@ -353,8 +336,6 @@ export async function deleteOrder(id: string) {
   revalidatePath("/pedidos");
   revalidatePath("/dashboard");
 }
-
-// ---------------------------------------------------------------------------
 
 function collectItems(
   formData: FormData,

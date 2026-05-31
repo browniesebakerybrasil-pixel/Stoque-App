@@ -5,10 +5,9 @@ import { Button } from "@/components/ui/button";
 import { FieldError, Input, Label, Textarea } from "@/components/ui/input";
 import {
   createCustomer,
-  initialCustomerState,
   updateCustomer,
 } from "@/app/(dashboard)/clientes/actions";
-import type { ActionState } from "@/lib/validation";
+import { emptyActionState, type ActionState } from "@/lib/validation";
 import type { Customer } from "@/types";
 
 interface Props {
@@ -23,7 +22,7 @@ export function CustomerForm({ mode, customer }: Props) {
       : updateCustomer.bind(null, customer!.id);
   const [state, formAction, pending] = useActionState<ActionState, FormData>(
     action,
-    initialCustomerState,
+    emptyActionState(),
   );
 
   return (
