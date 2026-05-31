@@ -1,12 +1,12 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Input, Label, Select, Textarea } from "@/components/ui/input";
 import { formatCurrency } from "@/lib/utils";
 import { updateOrderFromModal } from "@/app/(dashboard)/pedidos/actions";
-import { emptyActionState, type ActionState } from "@/lib/validation";
+import { emptyActionState } from "@/lib/validation";
 import {
   ORDER_COLUMNS,
   PAYMENT_METHOD_LABEL,
@@ -14,6 +14,19 @@ import {
 } from "./order-constants";
 import type { KanbanOrder } from "./types";
 
+/**
+ * Modal de detalhes do pedido.
+ *
+ * Mudanças desta versão (fix tela preta após salvar):
+ *   - Submissão via `useTransition` + chamada direta da Server Action no
+ *     callback de onSubmit. Mais previsível que `useActionState`: temos certeza
+ *     da ordem (await action → onClose() → React faz unmount).
+ *   - Body scroll lock isolado em efeito de mount/unmount (não depende mais
+ *     da identidade do objeto `order`, que muda a cada revalidate).
+ *   - createPortal continua usado para escapar do container do Kanban e da
+ *     pilha de stacking do DndContext.
+ *   - onClose é estabilizado via callback no parent.
+ */
 export function OrderDetailModal({
   order,
   onClose,
@@ -38,15 +51,17 @@ export function OrderDetailModal({
     return () => window.removeEventListener("keydown", onKey);
   }, [order, onClose]);
 
-  // body scroll lock quando aberto
+  // Body scroll lock — separado de `order` para não disparar ciclos de
+  // cleanup/apply enquanto o `order` é recriado por revalidate.
+  const isOpen = order != null;
   useEffect(() => {
-    if (!order) return;
+    if (!isOpen) return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = prev;
     };
-  }, [order]);
+  }, [isOpen]);
 
   if (!order || !mounted) return null;
 
@@ -54,7 +69,6 @@ export function OrderDetailModal({
     <div
       className="fixed inset-0 z-[100] flex items-end justify-center bg-black/50 backdrop-blur-sm sm:items-center sm:p-6"
       onMouseDown={(e) => {
-        // Só fecha se clicou EXATAMENTE no backdrop (não no conteúdo)
         if (e.target === e.currentTarget) onClose();
       }}
     >
@@ -79,15 +93,45 @@ function ModalBody({
   order: KanbanOrder;
   onClose: () => void;
 }) {
-  const action = updateOrderFromModal.bind(null, order.id);
-  const [state, formAction, pending] = useActionState<ActionState, FormData>(
-    action,
-    emptyActionState(),
-  );
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
 
+  // evita chamar onClose após desmontar (corrida com revalidate)
+  const mountedRef = useRef(true);
   useEffect(() => {
-    if (state.ok) onClose();
-  }, [state.ok, onClose]);
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const onSubmit = useCallback(
+    (formData: FormData) => {
+      setError(null);
+      startTransition(async () => {
+        try {
+          const result = await updateOrderFromModal(
+            order.id,
+            emptyActionState(),
+            formData,
+          );
+          if (result.ok) {
+            if (mountedRef.current) onClose();
+          } else {
+            if (mountedRef.current) {
+              setError(result.error ?? "Não foi possível salvar.");
+            }
+          }
+        } catch (e) {
+          console.error("[OrderDetailModal] save", e);
+          if (mountedRef.current) {
+            setError("Erro inesperado ao salvar. Tente novamente.");
+          }
+        }
+      });
+    },
+    [order.id, onClose],
+  );
 
   const balance = Number(order.total_amount) - Number(order.amount_paid);
 
@@ -148,7 +192,7 @@ function ModalBody({
         </ul>
       </section>
 
-      <form action={formAction} className="space-y-4">
+      <form action={onSubmit} className="space-y-4">
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
             <Label htmlFor="order_status">Status do pedido</Label>
@@ -252,9 +296,7 @@ function ModalBody({
           />
         </div>
 
-        {state.error ? (
-          <p className="text-sm text-red-700">{state.error}</p>
-        ) : null}
+        {error ? <p className="text-sm text-red-700">{error}</p> : null}
 
         <div className="flex justify-end gap-2 border-t border-[var(--border)] pt-4">
           <Button type="button" variant="ghost" onClick={onClose}>

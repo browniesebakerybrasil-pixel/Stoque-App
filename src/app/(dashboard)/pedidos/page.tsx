@@ -2,7 +2,6 @@ import Link from "next/link";
 import { requireOrganization } from "@/lib/auth/organization";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { Button } from "@/components/ui/button";
-import { CardHeader } from "@/components/ui/card";
 import { OrderKanban } from "@/components/pedidos/order-kanban";
 import type { KanbanOrder } from "@/components/pedidos/types";
 import type { SalesChannel } from "@/types";
@@ -13,7 +12,7 @@ export default async function OrdersPage() {
   const { organization } = await requireOrganization();
   const supabase = createAdminClient();
 
-  // Janela: últimos 60 dias + futuros (cobre entregas agendadas)
+  // Janela: ultimos 60 dias + futuros (cobre entregas agendadas)
   const since = new Date();
   since.setDate(since.getDate() - 60);
   const sinceStr = since.toISOString().slice(0, 10);
@@ -39,15 +38,31 @@ export default async function OrdersPage() {
 
   return (
     <div className="space-y-6">
-      <CardHeader
-        title="Pedidos"
-        description="Kanban completo. Arraste o card entre colunas para mudar o status, ou toque pra abrir os detalhes."
-        action={
-          <Link href="/pedidos/novo">
-            <Button>+ Novo pedido</Button>
-          </Link>
-        }
-      />
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <h2 className="font-serif text-2xl text-[var(--color-navy)] sm:text-3xl">
+            Pedidos
+          </h2>
+          <p className="mt-1 text-sm text-[var(--color-slate)]">
+            Kanban completo. Arraste o card entre colunas para mudar o status,
+            ou toque para abrir os detalhes.
+          </p>
+        </div>
+        <Link
+          href="/pedidos/novo"
+          className="w-full sm:w-auto"
+          aria-label="Novo pedido"
+        >
+          <Button
+            variant="primary"
+            size="lg"
+            className="w-full whitespace-nowrap sm:w-auto"
+          >
+            + Novo pedido
+          </Button>
+        </Link>
+      </header>
+
       <OrderKanban orders={kanbanOrders} channels={channelList} />
     </div>
   );

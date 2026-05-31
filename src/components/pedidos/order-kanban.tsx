@@ -1,6 +1,28 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useCallback, useMemo, useState, useTransition } from "react";
+import {
+  DndContext,
+  DragOverlay,
+  KeyboardSensor,
+  MouseSensor,
+  PointerSensor,
+  TouchSensor,
+  closestCorners,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { cn } from "@/lib/utils";
 import {
   applyFilters,
   defaultFilters,
@@ -22,33 +44,36 @@ interface Props {
   channels: SalesChannel[];
 }
 
-// Distância mínima em pixels que o dedo precisa percorrer para começar a
-// arrastar (evita iniciar drag por engano em um tap normal).
-const TOUCH_DRAG_THRESHOLD = 12;
-
+/**
+ * Kanban com dnd-kit:
+ *  - PointerSensor cobre mouse e pen, com `activationConstraint: { distance: 8 }`
+ *    pra distinguir click de drag.
+ *  - TouchSensor cobre iPad/celular com `delay: 150` (long-press curto) — o
+ *    delay evita conflito com o scroll horizontal nativo da página.
+ *  - KeyboardSensor garante acessibilidade.
+ *  - SortableContext por coluna; arrastar para outra coluna chama
+ *    updateOrderStatus.
+ */
 export function OrderKanban({ orders, channels }: Props) {
   const [filters, setFilters] = useState<FiltersState>(defaultFilters);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(null);
   const [, startTransition] = useTransition();
-  const [dragOverColumn, setDragOverColumn] = useState<OrderStatus | null>(
-    null,
-  );
 
-  // ---------------------------------------------------------------------------
-  // Touch drag (iPad / mobile)
-  // ---------------------------------------------------------------------------
-  type TouchState = {
-    id: string;
-    startX: number;
-    startY: number;
-    currentX: number;
-    currentY: number;
-    isDragging: boolean;
-    rect: { width: number; height: number };
-  };
-  const [touchDrag, setTouchDrag] = useState<TouchState | null>(null);
-  const touchDragRef = useRef<TouchState | null>(null);
-  touchDragRef.current = touchDrag;
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 8 },
+    }),
+    useSensor(MouseSensor, {
+      activationConstraint: { distance: 8 },
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 150, tolerance: 6 },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
 
   const filtered = useMemo(
     () => applyFilters(orders, filters),
@@ -69,16 +94,52 @@ export function OrderKanban({ orders, channels }: Props) {
     return map;
   }, [filtered]);
 
+  const activeOrder = useMemo(
+    () => (activeId ? orders.find((o) => o.id === activeId) ?? null : null),
+    [orders, activeId],
+  );
+
   const opened = useMemo(
     () => orders.find((o) => o.id === openId) ?? null,
     [orders, openId],
   );
 
-  function moveOrder(id: string, target: OrderStatus) {
-    const cur = orders.find((o) => o.id === id);
-    if (!cur || cur.order_status === target) return;
+  function handleDragStart(e: DragStartEvent) {
+    setActiveId(String(e.active.id));
+  }
+
+  function handleDragEnd(e: DragEndEvent) {
+    const id = String(e.active.id);
+    setActiveId(null);
+    if (!e.over) return;
+
+    // overId pode ser o id de um card destino (mesma/outra coluna) OU
+    // o id da coluna (quando soltou na area vazia).
+    const overId = String(e.over.id);
+    const order = orders.find((o) => o.id === id);
+    if (!order) return;
+
+    // Se o overId for um status conhecido -> e a coluna.
+    const knownStatuses: OrderStatus[] = [
+      "novo",
+      "confirmado",
+      "em_producao",
+      "pronto",
+      "saiu",
+      "entregue",
+      "cancelado",
+    ];
+    let target: OrderStatus | null = null;
+    if ((knownStatuses as string[]).includes(overId)) {
+      target = overId as OrderStatus;
+    } else {
+      const overOrder = orders.find((o) => o.id === overId);
+      if (overOrder) target = overOrder.order_status;
+    }
+    if (!target || target === order.order_status) return;
+
     startTransition(() => {
-      void updateOrderStatus(id, target).catch(() => undefined);
+      void updateOrderStatus(id, target!).catch(() => undefined);
     });
   }
 
@@ -88,87 +149,10 @@ export function OrderKanban({ orders, channels }: Props) {
     });
   }
 
-  // ---------- Touch handlers ----------
-  function handleTouchStart(e: React.TouchEvent, id: string) {
-    const t = e.touches[0];
-    const target = e.currentTarget as HTMLElement;
-    const rect = target.getBoundingClientRect();
-    setTouchDrag({
-      id,
-      startX: t.clientX,
-      startY: t.clientY,
-      currentX: t.clientX,
-      currentY: t.clientY,
-      isDragging: false,
-      rect: { width: rect.width, height: rect.height },
-    });
-  }
+  // Estabiliza onClose para evitar invalidar effects no modal a cada render
+  // (o que pode causar ciclos de body-lock e flickers de tela).
+  const closeModal = useCallback(() => setOpenId(null), []);
 
-  useEffect(() => {
-    if (!touchDrag) return;
-
-    function onMove(e: TouchEvent) {
-      const cur = touchDragRef.current;
-      if (!cur) return;
-      const t = e.touches[0];
-      const dx = t.clientX - cur.startX;
-      const dy = t.clientY - cur.startY;
-      const started =
-        cur.isDragging || Math.hypot(dx, dy) > TOUCH_DRAG_THRESHOLD;
-
-      if (started) {
-        e.preventDefault();
-        const el = document.elementFromPoint(t.clientX, t.clientY);
-        const colEl = el?.closest("[data-column-status]");
-        const status = (colEl?.getAttribute("data-column-status") ?? null) as
-          | OrderStatus
-          | null;
-        setDragOverColumn(status);
-        setTouchDrag({
-          ...cur,
-          currentX: t.clientX,
-          currentY: t.clientY,
-          isDragging: true,
-        });
-      }
-    }
-
-    function onEnd(e: TouchEvent) {
-      const cur = touchDragRef.current;
-      if (!cur) return;
-      if (cur.isDragging) {
-        const t = e.changedTouches[0];
-        const el = document.elementFromPoint(t.clientX, t.clientY);
-        const colEl = el?.closest("[data-column-status]");
-        const status = colEl?.getAttribute("data-column-status") as
-          | OrderStatus
-          | null;
-        if (status) moveOrder(cur.id, status);
-      } else {
-        // Não saiu do threshold → tratar como tap: abre modal.
-        setOpenId(cur.id);
-      }
-      setTouchDrag(null);
-      setDragOverColumn(null);
-    }
-
-    function onCancel() {
-      setTouchDrag(null);
-      setDragOverColumn(null);
-    }
-
-    document.addEventListener("touchmove", onMove, { passive: false });
-    document.addEventListener("touchend", onEnd);
-    document.addEventListener("touchcancel", onCancel);
-    return () => {
-      document.removeEventListener("touchmove", onMove);
-      document.removeEventListener("touchend", onEnd);
-      document.removeEventListener("touchcancel", onCancel);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [touchDrag !== null]);
-
-  // ---------- Render ----------
   return (
     <div className="space-y-4">
       <OrderFilters
@@ -177,116 +161,183 @@ export function OrderKanban({ orders, channels }: Props) {
         channels={channels}
       />
 
-      <div
-        className="-mx-4 overflow-x-auto px-4 pb-3 md:mx-0 md:px-0"
-        style={{
-          WebkitOverflowScrolling: "touch",
-          scrollBehavior: "smooth",
-        }}
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCorners}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+        onDragCancel={() => setActiveId(null)}
       >
-        <div className="flex min-w-fit gap-3">
-          {ORDER_COLUMNS.map((col) => {
-            const color = ORDER_STATUS_COLOR[col.status];
-            const isTarget = dragOverColumn === col.status;
-            return (
-              <div
-                key={col.status}
-                data-column-status={col.status}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = "move";
-                  if (dragOverColumn !== col.status) {
-                    setDragOverColumn(col.status);
-                  }
-                }}
-                onDragLeave={() => setDragOverColumn(null)}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  const id = e.dataTransfer.getData("text/plain");
-                  setDragOverColumn(null);
-                  if (id) moveOrder(id, col.status);
-                }}
-                className={
-                  "flex w-72 shrink-0 flex-col overflow-hidden rounded-lg border bg-white shadow-sm transition-all" +
-                  (isTarget
-                    ? " ring-2 ring-offset-1"
-                    : " border-[var(--border)]")
-                }
-                style={
-                  isTarget
-                    ? {
-                        borderColor: color,
-                        boxShadow: `0 0 0 2px ${color}33`,
-                      }
-                    : undefined
-                }
-              >
-                {/* barra superior colorida */}
-                <div className="h-1" style={{ backgroundColor: color }} />
-
-                <header className="border-b border-[var(--border)] bg-white px-3 py-3">
-                  <div className="flex items-baseline justify-between gap-2">
-                    <h3
-                      className="text-base font-semibold leading-tight"
-                      style={{ color }}
-                    >
-                      {col.label}
-                    </h3>
-                    <span
-                      className="rounded-full bg-[var(--color-cream-50)] px-2 py-0.5 text-xs font-medium text-[var(--color-slate)]"
-                    >
-                      {byStatus[col.status].length}
-                    </span>
-                  </div>
-                  {col.hint ? (
-                    <p className="mt-0.5 text-[11px] text-[var(--color-slate)]">
-                      {col.hint}
-                    </p>
-                  ) : null}
-                </header>
-
-                <div className="flex flex-1 flex-col gap-2 bg-[var(--color-cream-50)] p-2">
-                  {byStatus[col.status].map((o) => (
-                    <OrderCard
-                      key={o.id}
-                      order={o}
-                      onOpen={setOpenId}
-                      onMarkPaid={markPaid}
-                      onTouchStart={handleTouchStart}
-                      isDragging={touchDrag?.id === o.id && touchDrag.isDragging}
-                    />
-                  ))}
-                  {byStatus[col.status].length === 0 ? (
-                    <div className="rounded-md border border-dashed border-[var(--border)] bg-white p-3 text-center text-xs text-[var(--color-slate)]">
-                      —
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Ghost que segue o dedo durante o drag touch */}
-      {touchDrag?.isDragging ? (
         <div
-          aria-hidden
-          className="pointer-events-none fixed z-[60] rounded-md border-2 border-[var(--color-brown)] bg-white p-3 shadow-xl"
+          className="-mx-4 overflow-x-auto px-4 pb-3 md:mx-0 md:px-0"
           style={{
-            left: touchDrag.currentX - touchDrag.rect.width / 2,
-            top: touchDrag.currentY - 24,
-            width: touchDrag.rect.width,
-            opacity: 0.95,
+            WebkitOverflowScrolling: "touch",
+            scrollBehavior: "smooth",
           }}
         >
-          <p className="text-xs font-medium text-[var(--color-navy)]">
-            arrastando…
-          </p>
+          <div className="flex min-w-fit gap-3">
+            {ORDER_COLUMNS.map((col) => (
+              <KanbanColumn
+                key={col.status}
+                status={col.status}
+                label={col.label}
+                hint={col.hint}
+                color={ORDER_STATUS_COLOR[col.status]}
+                items={byStatus[col.status]}
+                onOpen={setOpenId}
+                onMarkPaid={markPaid}
+                activeId={activeId}
+              />
+            ))}
+          </div>
         </div>
-      ) : null}
 
-      <OrderDetailModal order={opened} onClose={() => setOpenId(null)} />
+        <DragOverlay dropAnimation={null}>
+          {activeOrder ? (
+            <div style={{ width: 272 }}>
+              <OrderCard
+                order={activeOrder}
+                onOpen={() => undefined}
+                onMarkPaid={() => undefined}
+                isDragOverlay
+              />
+            </div>
+          ) : null}
+        </DragOverlay>
+      </DndContext>
+
+      <OrderDetailModal order={opened} onClose={closeModal} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+function KanbanColumn({
+  status,
+  label,
+  hint,
+  color,
+  items,
+  onOpen,
+  onMarkPaid,
+  activeId,
+}: {
+  status: OrderStatus;
+  label: string;
+  hint: string;
+  color: string;
+  items: KanbanOrder[];
+  onOpen: (id: string) => void;
+  onMarkPaid: (id: string) => void;
+  activeId: string | null;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: status });
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={cn(
+        "flex w-72 shrink-0 flex-col overflow-hidden rounded-lg border bg-white shadow-sm transition-all",
+        isOver
+          ? "ring-2 ring-offset-1"
+          : "border-[var(--border)]",
+      )}
+      style={
+        isOver
+          ? {
+              borderColor: color,
+              boxShadow: `0 0 0 2px ${color}33`,
+            }
+          : undefined
+      }
+    >
+      {/* barra superior colorida */}
+      <div className="h-1" style={{ backgroundColor: color }} />
+
+      <header className="border-b border-[var(--border)] bg-white px-3 py-3">
+        <div className="flex items-baseline justify-between gap-2">
+          <h3
+            className="text-base font-semibold leading-tight"
+            style={{ color }}
+          >
+            {label}
+          </h3>
+          <span className="rounded-full bg-[var(--color-cream-50)] px-2 py-0.5 text-xs font-medium text-[var(--color-slate)]">
+            {items.length}
+          </span>
+        </div>
+        {hint ? (
+          <p className="mt-0.5 text-[11px] text-[var(--color-slate)]">{hint}</p>
+        ) : null}
+      </header>
+
+      <SortableContext
+        items={items.map((i) => i.id)}
+        strategy={verticalListSortingStrategy}
+      >
+        <div className="flex flex-1 flex-col gap-2 bg-[var(--color-cream-50)] p-2">
+          {items.map((o) => (
+            <SortableCard
+              key={o.id}
+              order={o}
+              onOpen={onOpen}
+              onMarkPaid={onMarkPaid}
+              isActive={activeId === o.id}
+            />
+          ))}
+          {items.length === 0 ? (
+            <div className="rounded-md border border-dashed border-[var(--border)] bg-white p-3 text-center text-xs text-[var(--color-slate)]">
+              {isOver ? "solte aqui" : "—"}
+            </div>
+          ) : null}
+        </div>
+      </SortableContext>
+    </div>
+  );
+}
+
+function SortableCard({
+  order,
+  onOpen,
+  onMarkPaid,
+  isActive,
+}: {
+  order: KanbanOrder;
+  onOpen: (id: string) => void;
+  onMarkPaid: (id: string) => void;
+  isActive: boolean;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: order.id });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    // Permite o scroll horizontal da página, mas reserva o drag pra dnd-kit
+    touchAction: "none",
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      className="touch-none"
+    >
+      <OrderCard
+        order={order}
+        onOpen={onOpen}
+        onMarkPaid={onMarkPaid}
+        isDragging={isDragging || isActive}
+      />
     </div>
   );
 }

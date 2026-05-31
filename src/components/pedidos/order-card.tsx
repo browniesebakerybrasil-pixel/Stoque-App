@@ -10,25 +10,23 @@ import type { KanbanOrder } from "./types";
 interface Props {
   order: KanbanOrder;
   onOpen: (id: string) => void;
-  onDragStart?: (id: string) => void;
   onMarkPaid: (id: string) => void;
-  onTouchStart?: (e: React.TouchEvent, id: string) => void;
   isDragging?: boolean;
+  isDragOverlay?: boolean;
 }
 
 /**
  * Card de pedido do Kanban.
- * - draggable HTML5 (desktop)
- * - onTouchStart inicia drag manual no iPad (gerenciado pelo Kanban)
- * - botão "Pago" sempre visível e fora do clique do card (stopPropagation)
+ * O drag-and-drop e gerenciado pelo Kanban via dnd-kit (useSortable).
+ * - clique abre modal de detalhes
+ * - botão Pago tem stopPropagation para nao disparar click do card
  */
 export function OrderCard({
   order,
   onOpen,
-  onDragStart,
   onMarkPaid,
-  onTouchStart,
   isDragging,
+  isDragOverlay,
 }: Props) {
   const today = new Date().toISOString().slice(0, 10);
   const deliveryState: "future" | "today" | "past" | "none" = order.delivery_date
@@ -48,21 +46,14 @@ export function OrderCard({
 
   return (
     <article
-      data-order-id={order.id}
-      draggable
-      onDragStart={(e) => {
-        e.dataTransfer.setData("text/plain", order.id);
-        e.dataTransfer.effectAllowed = "move";
-        onDragStart?.(order.id);
-      }}
-      onTouchStart={(e) => onTouchStart?.(e, order.id)}
       onClick={() => onOpen(order.id)}
       className={cn(
-        "cursor-pointer touch-none rounded-md border bg-white p-3 shadow-sm transition-all",
-        "active:scale-[0.99]",
-        isDragging
-          ? "border-[var(--color-brown)] opacity-50"
-          : "border-[var(--border)] hover:border-[var(--color-navy)]",
+        "select-none rounded-md border bg-white p-3 shadow-sm transition-all",
+        isDragOverlay
+          ? "rotate-1 border-[var(--color-brown)] shadow-xl"
+          : isDragging
+            ? "border-[var(--color-brown)] opacity-40"
+            : "border-[var(--border)] hover:border-[var(--color-navy)]",
       )}
     >
       <div className="flex items-start justify-between gap-2">
@@ -102,9 +93,7 @@ export function OrderCard({
 
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-1.5 text-xs text-[var(--color-slate)]">
-          <span
-            title={order.delivery_type === "entrega" ? "Entrega" : "Retirada"}
-          >
+          <span title={order.delivery_type === "entrega" ? "Entrega" : "Retirada"}>
             {order.delivery_type === "entrega" ? "→ entrega" : "↑ retirada"}
           </span>
           {order.delivery_date ? (
@@ -136,6 +125,7 @@ export function OrderCard({
             onMarkPaid(order.id);
           }}
           onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
           className="mt-3 w-full rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1.5 text-xs font-medium text-emerald-800 transition-colors hover:bg-emerald-100 active:bg-emerald-200"
         >
           Marcar como pago
